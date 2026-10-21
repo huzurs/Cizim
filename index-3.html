@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Çiz & Tahmin">
+<title>Çiz & Tahmin Et</title>
+<style>
+:root{--bg:#eef5ff;--card:#fff;--tx:#14263f;--mut:#5f7694;--ac:#2563eb;--ac2:#dbe9ff;--bd:#c4d8f4}
+@media (prefers-color-scheme:dark){:root{--bg:#0e1a2b;--card:#16263d;--tx:#e8f0fc;--mut:#8fa6c4;--ac:#4f8ff7;--ac2:#1f3858;--bd:#2a4466}}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{height:100%;margin:0}
+body{background:var(--bg);color:var(--tx);font-family:-apple-system,"Segoe UI",Roboto,sans-serif;display:flex;flex-direction:column;height:100dvh;overflow:hidden;padding:env(safe-area-inset-top) 12px env(safe-area-inset-bottom)}
+.hide{display:none!important}
+button{font:inherit;border:0;border-radius:14px;padding:13px 16px;background:var(--ac);color:#fff;font-weight:600;font-size:16px;cursor:pointer}
+button.alt{background:var(--ac2);color:var(--tx)}
+input{font-size:16px;padding:12px;border-radius:12px;border:1px solid var(--bd);background:var(--card);color:var(--tx);width:100%}
+#join,#msg{margin:auto;width:100%;max-width:420px;text-align:center}
+#join input{margin-bottom:10px}#join button,#msg button{width:100%;margin-top:8px}
+.big{font-size:30px;font-weight:800;color:var(--ac);margin:10px 0}
+#game{display:flex;flex-direction:column;flex:1;min-height:0;max-width:480px;width:100%;margin:0 auto}
+#top{display:flex;justify-content:space-between;font-size:14px;color:var(--mut);padding:6px 2px}
+#top b{color:var(--tx)}
+#cvw{display:flex;justify-content:center}
+canvas{width:min(100%,44dvh);aspect-ratio:1/1;background:#fff;border:2px solid var(--bd);border-radius:16px;touch-action:none;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none}
+#tools{display:flex;gap:6px;justify-content:center;align-items:center;flex-wrap:wrap;margin:8px 0}
+.sw{width:28px;height:28px;border-radius:50%;padding:0;border:3px solid var(--bd)}
+.sw.on{border-color:var(--tx)}
+.mini{padding:7px 11px;font-size:14px}
+#sizes{display:flex;gap:10px;justify-content:center;align-items:center;margin-bottom:6px}
+.sz{background:var(--ac2);width:42px;height:42px;padding:0;display:flex;align-items:center;justify-content:center;border-radius:50%}
+.sz.on{outline:3px solid var(--ac)}
+.sz i{display:block;background:var(--tx);border-radius:50%}
+#chat{flex:1;min-height:0;overflow-y:auto;background:var(--card);border:1px solid var(--bd);border-radius:14px;padding:8px;font-size:15px}
+#chat p{margin:3px 0;word-break:break-word}#chat .sys{color:var(--ac);font-weight:600}#chat .me b{color:var(--ac)}
+#cf{display:flex;gap:8px;padding:8px 0}
+#cf button{padding:10px 16px}
+</style>
+</head>
+<body>
+<div id="join">
+<h1>🎨 Çiz &amp; Tahmin Et</h1>
+<p style="color:var(--mut)">İkiniz de aynı oda kodunu yazın</p>
+<input id="nm" placeholder="Adın" maxlength="14" autocomplete="off">
+<input id="rc" placeholder="Oda kodu (örn. ask)" maxlength="12" autocapitalize="off" autocomplete="off">
+<button id="go">Odaya gir</button>
+<p id="err" style="color:var(--ac)"></p>
+</div>
+
+<div id="game" class="hide">
+<div id="top"><span id="sc"></span><span id="st"></span></div>
+<div id="msg" class="hide"></div>
+<div id="cvw"><canvas id="cv" width="600" height="600"></canvas></div>
+<div id="tools" class="hide"></div>
+<div id="sizes" class="hide"></div>
+<div id="chat"></div>
+<form id="cf"><input id="ci" placeholder="Tahmin yaz veya mesajlaş..." autocomplete="off" enterkeyhint="send"><button>Gönder</button></form>
+</div>
+
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
+<script src="words.js"></script>
+<script>
+// >>> Firebase Console'dan aldığın ayarları buraya yapıştır <<<
+var CONFIG={
+ apiKey:"BURAYA",
+ authDomain:"PROJE.firebaseapp.com",
+ databaseURL:"https://PROJE-default-rtdb.firebaseio.com",
+ projectId:"PROJE",
+ appId:"BURAYA"
+};
+var $=function(i){return document.getElementById(i)};
+var COLORS=["#222222","#e8456b","#2f7de1","#2fa84f","#f5a623","#8e44ad","#8b5a2b","#ffffff"],SIZES=[3,6,11,18];
+var myId=localStorage.getItem("ct_id")||(Math.random().toString(36).slice(2)+Date.now().toString(36));localStorage.setItem("ct_id",myId);
+$("nm").value=localStorage.getItem("ct_nm")||"";$("rc").value=localStorage.getItem("ct_rc")||"";
+var db,ref,me=-1,names=["",""],S={},off=0,color=COLORS[0],size=6,drawing=false,buf=[],last=null,lastClr=-1,candidate="",tmr=null;
+var cv=$("cv"),ctx=cv.getContext("2d");
+function now(){return Date.now()+off}
+function norm(s){return String(s||"").toLocaleLowerCase("tr").replace(/\s+/g," ").trim()}
+function clearCv(){ctx.fillStyle="#fff";ctx.fillRect(0,0,600,600);ctx.lineCap="round";ctx.lineJoin="round"}
+clearCv();
+function seg(c,s,p){ctx.strokeStyle=c;ctx.fillStyle=c;ctx.lineWidth=s;ctx.beginPath();ctx.moveTo(p[0],p[1]);for(var i=2;i<p.length;i+=2)ctx.lineTo(p[i],p[i+1]);if(p.length<=2||(p.length==4&&p[0]==p[2]&&p[1]==p[3])){ctx.arc(p[0],p[1],s/2,0,7);ctx.fill()}else ctx.stroke()}
+function isDrawer(){return S.drawer===me}
+
+$("go").onclick=function(){
+ var n=$("nm").value.trim(),r=norm($("rc").value).replace(/[^a-z0-9ğüşıöç]/g,"");
+ if(!n||!r){$("err").textContent="Ad ve oda kodu gerekli";return}
+ if(CONFIG.apiKey==="BURAYA"){$("err").textContent="Önce Firebase ayarlarını index.html içine yapıştır";return}
+ localStorage.setItem("ct_nm",n);localStorage.setItem("ct_rc",r);
+ firebase.initializeApp(CONFIG);db=firebase.database();ref=db.ref("rooms/"+r);
+ db.ref(".info/serverTimeOffset").on("value",function(s){off=s.val()||0});
+ ref.child("players").transaction(function(p){
+  p=p||{};if((p.a&&p.a.id===myId)||(p.b&&p.b.id===myId)){if(p.a.id===myId)p.a.n=n;else p.b.n=n;return p}
+  if(!p.a)p.a={id:myId,n:n};else if(!p.b)p.b={id:myId,n:n};else return;return p;
+ },function(e,ok,snap){
+  if(!ok){$("err").textContent="Oda dolu veya bağlanılamadı";return}
+  var p=snap.val();me=p.a.id===myId?0:1;start(r);
+ });
+};
+function start(room){
+ $("join").classList.add("hide");$("game").classList.remove("hide");buildTools();
+ ref.child("state").transaction(function(s){return s||{drawer:0,phase:"wait",s0:0,s1:0,clr:0,round:1}});
+ ref.child("players").on("value",function(s){var p=s.val()||{};names=[p.a?p.a.n:"…",p.b?p.b.n:"…"];
+  if(p.b&&me===0)ref.child("state").transaction(function(s){if(s&&s.phase==="wait"){s.phase="pick"}return s});render()});
+ ref.child("state").on("value",function(s){S=s.val()||{};
+  if(S.clr!==lastClr){lastClr=S.clr;clearCv()}
+  if(S.phase==="pick"&&isDrawer())newWord();render()});
+ ref.child("strokes").on("child_added",function(s){if(isDrawer())return;var v=s.val();seg(v.c,v.s,v.p)});
+ ref.child("chat").limitToLast(60).on("child_added",function(s){var m=s.val();addMsg(m);
+  if(isDrawer()&&S.phase==="draw"&&m.f!==me&&m.r===S.round&&m.t!==2&&norm(m.x)===norm(S.word))win()});
+ if(tmr)clearInterval(tmr);tmr=setInterval(tick,500);
+}
+function addMsg(m){var d=document.createElement("p");
+ if(m.t===2){d.className="sys";d.textContent=m.x}else{d.className=m.f===me?"me":"";var b=document.createElement("b");b.textContent=names[m.f]+": ";d.appendChild(b);d.appendChild(document.createTextNode(m.x))}
+ var c=$("chat");c.appendChild(d);c.scrollTop=c.scrollHeight}
+function sys(x){ref.child("chat").push({t:2,x:x})}
+function win(){ref.child("state").transaction(function(s){if(s&&s.phase==="draw"){s.phase="done";s.res="ok";s.s0++;s.s1++}return s},function(e,ok,sn){if(ok&&sn.val().res==="ok")sys("🎉 Doğru! Kelime: "+sn.val().word)})}
+function tick(){
+ if(S.phase==="draw"){var l=Math.max(0,Math.ceil((S.endAt-now())/1000));$("st").textContent="⏱ "+l;
+  if(l<=0&&now()>S.endAt+800)ref.child("state").transaction(function(s){if(s&&s.phase==="draw"&&now()>=s.endAt){s.phase="done";s.res="time"}return s})}
+}
+function newWord(){candidate=WORDS[Math.floor(Math.random()*WORDS.length)];render()}
+function render(){
+ if(me<0||!S.phase)return;
+ $("sc").innerHTML="<b>"+names[0]+"</b> "+(S.s0||0)+" · <b>"+names[1]+"</b> "+(S.s1||0);
+ var m=$("msg"),d=isDrawer(),ph=S.phase,h="";
+ var drawNow=ph==="draw"&&d;
+ $("tools").classList.toggle("hide",!drawNow);if(!drawNow)$("sizes").classList.add("hide");
+ $("cvw").classList.toggle("hide",ph==="wait"||ph==="pick");
+ if(ph!=="draw")$("st").textContent="";
+ if(ph==="wait"){h="<p>Rakip bekleniyor… 💌</p><p style='color:var(--mut)'>Oda kodunu ona söyle: <b>"+localStorage.getItem("ct_rc")+"</b></p>"}
+ else if(ph==="pick"){h=d?"<p>Çizeceğin kelime:</p><div class='big'>"+candidate+"</div><button id='b1'>Çizmeye başla ✏️</button><button class='alt' id='b2'>Başka kelime</button>":"<p>"+names[S.drawer]+" kelime seçiyor… 🤫</p>"}
+ else if(ph==="draw"){h=d?"<p style='margin:4px'>✏️ Çiz: <b>"+S.word+"</b> <button class='alt mini' id='b3'>Pas</button></p>":"<p style='margin:4px'>🤔 "+names[S.drawer]+" çiziyor, tahminini yaz!</p>"}
+ else if(ph==="done"){h="<p>"+(S.res==="ok"?"🎉 Bildiniz!":S.res==="skip"?"⏭ Pas geçildi.":"⏰ Süre doldu.")+" Kelime:</p><div class='big'>"+S.word+"</div><button id='b4'>Sonraki tur ▶</button>"}
+ m.innerHTML=h;m.classList.toggle("hide",!h||(ph==="draw"));
+ if(ph==="draw"){m.classList.remove("hide");m.style.margin="0"}else m.style.margin="auto";
+ $("chat").parentNode.insertBefore($("chat"),null);
+ if($("b1"))$("b1").onclick=function(){ref.child("state").update({phase:"draw",word:candidate,startAt:now(),endAt:now()+90000})};
+ if($("b2"))$("b2").onclick=newWord;
+ if($("b3"))$("b3").onclick=function(){ref.child("state").transaction(function(s){if(s&&s.phase==="draw"){s.phase="done";s.res="skip"}return s})};
+ if($("b4"))$("b4").onclick=nextRound;
+ if(ph==="pick"||ph==="wait")$("chat").style.flex="1";
+}
+function nextRound(){
+ ref.child("strokes").remove().then(function(){
+  ref.child("state").transaction(function(s){if(s&&s.phase==="done"){s.phase="pick";s.drawer=1-s.drawer;s.round++;s.word="";s.res=null;s.clr=(s.clr||0)+1}return s})});
+}
+function buildTools(){
+ var h="";COLORS.forEach(function(c,i){h+='<button type="button" class="sw'+(i?"":" on")+'" data-c="'+c+'" style="background:'+c+'"></button>'});
+ h+='<button type="button" class="alt mini" id="szb">Kalınlık</button><button type="button" class="alt mini" id="clb">🗑</button>';
+ $("tools").innerHTML=h;
+ $("tools").querySelectorAll(".sw").forEach(function(b){b.onclick=function(){color=b.dataset.c;$("tools").querySelectorAll(".sw").forEach(function(x){x.classList.remove("on")});b.classList.add("on")}});
+ var s="";SIZES.forEach(function(z){s+='<button type="button" class="sz'+(z===size?" on":"")+'" data-z="'+z+'"><i style="width:'+Math.max(4,z)+'px;height:'+Math.max(4,z)+'px"></i></button>'});
+ $("sizes").innerHTML=s;
+ $("sizes").querySelectorAll(".sz").forEach(function(b){b.onclick=function(){size=+b.dataset.z;$("sizes").querySelectorAll(".sz").forEach(function(x){x.classList.remove("on")});b.classList.add("on");$("sizes").classList.add("hide")}});
+ $("szb").onclick=function(){$("sizes").classList.toggle("hide")};
+ $("clb").onclick=function(){ref.child("strokes").remove().then(function(){ref.child("state/clr").transaction(function(n){return (n||0)+1})})};
+}
+function pt(e){var b=cv.getBoundingClientRect();return[Math.round((e.clientX-b.left)/b.width*600),Math.round((e.clientY-b.top)/b.height*600)]}
+function flush(){if(buf.length<2)return;var p=buf.slice();buf=p.slice(-2);ref.child("strokes").push({c:color,s:size,p:p.length<=2?[p[0],p[1],p[0],p[1]]:p})}
+cv.addEventListener("pointerdown",function(e){
+ if(!(S.phase==="draw"&&isDrawer()))return;e.preventDefault();cv.setPointerCapture(e.pointerId);drawing=true;
+ var p=pt(e);buf=[p[0],p[1]];seg(color,size,[p[0],p[1],p[0],p[1]]);last=p;
+ clearTimeout(cv._t);cv._t=setInterval(flush,120);
+});
+cv.addEventListener("pointermove",function(e){
+ if(!drawing)return;e.preventDefault();var p=pt(e);seg(color,size,[last[0],last[1],p[0],p[1]]);last=p;buf.push(p[0],p[1]);
+});
+function up(){if(!drawing)return;drawing=false;clearInterval(cv._t);if(buf.length===2)buf.push(buf[0],buf[1]);flush();buf=[]}
+["pointerup","pointercancel"].forEach(function(t){cv.addEventListener(t,up)});
+$("cf").onsubmit=function(e){e.preventDefault();var v=$("ci").value.trim();if(!v||me<0)return;$("ci").value="";$("ci").focus();
+ ref.child("chat").push({f:me,x:v.slice(0,200),r:S.round||0,t:1,ts:firebase.database.ServerValue.TIMESTAMP})};
+</script>
+</body>
+</html>
